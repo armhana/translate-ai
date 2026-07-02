@@ -3,6 +3,19 @@
 Stand-alone-Übersetzungssoftware in Python. Alle KI-Modelle laufen lokal auf diesem
 Rechner — nach dem einmaligen Modell-Download ist keine Internetverbindung mehr nötig.
 
+## Installation (neuer Rechner)
+
+1. [Python 3.12](https://www.python.org/downloads/) installieren („Add python.exe
+   to PATH" ankreuzen)
+2. Dieses Repository klonen oder als ZIP herunterladen
+3. **Installieren.bat** doppelklicken — richtet die Python-Umgebung ein und lädt
+   alle KI-Modelle (mehrere GB, einmalig)
+
+`venv/`, `models/` und `tools/` liegen bewusst **nicht** im Repository: GitHub
+lehnt Dateien über 100 MB ab, und eine virtuelle Python-Umgebung ist ohnehin an
+den Rechner gebunden, auf dem sie erzeugt wurde. Das Installationsskript stellt
+alles reproduzierbar wieder her.
+
 ## Starten
 
 Doppelklick auf **Start.bat** (oder: `venv\Scripts\python.exe app\main.py` für
