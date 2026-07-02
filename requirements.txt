@@ -1,0 +1,18 @@
+# Basis: Python 3.12
+# Installation:  python -m venv venv && venv\Scripts\pip install -r requirements.txt
+faster-whisper
+argostranslate
+sounddevice
+soundcard
+numpy
+piper-tts
+pyttsx3
+comtypes
+truststore
+# Stimmen-Klonen (eigene Stimme, XTTS-v2 — Lizenz: nur nicht-kommerzielle Nutzung)
+coqui-tts[codec]
+transformers<5
+torchaudio
+soundfile
+# Video-Export (Tonspur ersetzen)
+imageio-ffmpeg

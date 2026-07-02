@@ -1,0 +1,567 @@
+"""Live-Übersetzer — Stand-alone-App (Windows/Linux).
+
+Drei Modi:
+  1. Video/Datei:   Videodatei transkribieren, übersetzen, vertonen, als WAV speichern.
+  2. Gesprächsmodus: Mikrofon live übersetzen (z.B. Gespräch mit Kopfhörer) —
+                     beide Richtungen: eigene Stimme und Systemton des Partners.
+  3. Anruf-Modus:    wie Gesprächsmodus, Ausgabe der eigenen Übersetzung auf ein
+                     virtuelles Kabel, damit der Partner im Call sie hört.
+
+Hinweis: Die Verarbeitung von Gesprächen setzt die Einwilligung aller Beteiligten
+voraus (§ 201 StGB).
+"""
+import json
+import locale
+import os
+import threading
+import time
+import tkinter as tk
+from tkinter import filedialog, messagebox, ttk
+
+import audio as audio_mod
+import engine
+
+APP_TITLE = "Live-Übersetzer (lokal & offline)"
+CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                           "einstellungen.json")
+
+DATENSCHUTZ_TEXT = (
+    "Einwilligung zur Datenverarbeitung (Art. 6 Abs. 1 lit. a DSGVO)\n\n"
+    "Diese Anwendung verarbeitet Audio- und Videodaten ausschließlich LOKAL auf "
+    "diesem Gerät. Es werden keine Inhalte an Server oder Dritte übertragen. "
+    "Eine Internetverbindung wird nur für den einmaligen Download von KI-Modellen "
+    "genutzt (dabei werden keine Ihrer Inhalte übermittelt).\n\n"
+    "Verarbeitete Daten: Sprachaufnahmen (Mikrofon), Systemton, Videodateien, "
+    "daraus erzeugte Transkripte, Übersetzungen und Sprachausgaben sowie — bei "
+    "aktivierter Funktion 'Eigene Stimme' — ein Stimmprofil aus Ihrem Video.\n"
+    "Zweck: Übersetzung und Neuvertonung.\n"
+    "Speicherung: nur die Dateien, die Sie selbst aktiv speichern.\n\n"
+    "Beim Live-Modus gilt zusätzlich: Die Verarbeitung der Stimme von "
+    "Gesprächspartnern erfordert deren vorherige Einwilligung (§ 201 StGB, "
+    "Art. 6/7 DSGVO). Sie bestätigen diese vor jedem Start des Live-Modus.\n\n"
+    "Sie können diese Einwilligung jederzeit über den Button 'Datenschutz' "
+    "widerrufen; die App beendet sich dann."
+)
+
+LANGS = [
+    ("de", "Deutsch"), ("en", "Englisch"), ("fr", "Französisch"),
+    ("es", "Spanisch"), ("it", "Italienisch"), ("pt", "Portugiesisch"),
+    ("nl", "Niederländisch"), ("pl", "Polnisch"), ("ru", "Russisch"),
+    ("tr", "Türkisch"), ("zh", "Chinesisch"),
+]
+
+
+def system_language():
+    """Zielsprache aus der Geräte-/Systemsprache ableiten."""
+    loc = locale.getdefaultlocale()[0] or "en_US"
+    code = loc.split("_")[0].lower()
+    return code if code in dict(LANGS) else "en"
+
+
+def load_config():
+    try:
+        with open(CONFIG_PATH, encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:
+        return {}
+
+
+def save_config(cfg):
+    with open(CONFIG_PATH, "w", encoding="utf-8") as fh:
+        json.dump(cfg, fh, indent=2)
+
+
+class ConsentDialog(tk.Toplevel):
+    """DSGVO-Einwilligungsdialog: ohne aktive Zustimmung startet die App nicht."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("Einwilligung erforderlich")
+        self.accepted = False
+        self.transient(parent)
+        self.grab_set()
+        self.protocol("WM_DELETE_WINDOW", self._decline)
+        txt = tk.Text(self, wrap="word", width=86, height=22, padx=12, pady=12)
+        txt.insert("1.0", DATENSCHUTZ_TEXT)
+        txt.config(state="disabled")
+        txt.pack(fill="both", expand=True)
+        row = ttk.Frame(self); row.pack(pady=10)
+        ttk.Button(row, text="Ich stimme zu", command=self._accept).pack(side="left", padx=8)
+        ttk.Button(row, text="Ablehnen (App beenden)", command=self._decline).pack(side="left", padx=8)
+
+    def _accept(self):
+        self.accepted = True
+        self.destroy()
+
+    def _decline(self):
+        self.accepted = False
+        self.destroy()
+
+
+class App(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title(APP_TITLE)
+        self.geometry("980x760")
+        self.stt = engine.SpeechToText(model_size="small")
+        self.stt_live = engine.SpeechToText(model_size="base")  # schneller für Live
+        self.translator = engine.Translator()
+        self.tts = engine.TextToSpeech()
+        self.clone_tts = engine.VoiceCloneTTS()
+        self.live_threads = []
+        self.recorders = []
+        self.players = {}
+        self.live_running = False
+        self.player = audio_mod.SeekablePlayer()
+        self.current_audio = None  # (np-Array, Rate) der letzten Vertonung
+
+        self._build_ui()
+        self.after(50, self._require_consent)
+
+    # ------------------------------------------------------- Einwilligung --
+    def _require_consent(self):
+        cfg = load_config()
+        if cfg.get("einwilligung"):
+            return
+        dlg = ConsentDialog(self)
+        self.wait_window(dlg)
+        if not dlg.accepted:
+            self.destroy()
+            return
+        cfg["einwilligung"] = {"erteilt": True,
+                               "zeitpunkt": time.strftime("%Y-%m-%d %H:%M:%S")}
+        save_config(cfg)
+
+    def _show_privacy(self):
+        if messagebox.askyesno("Datenschutz",
+                               DATENSCHUTZ_TEXT + "\n\nEinwilligung WIDERRUFEN und App beenden?"):
+            cfg = load_config()
+            cfg.pop("einwilligung", None)
+            save_config(cfg)
+            self.destroy()
+
+    # ------------------------------------------------------------------ UI --
+    def _build_ui(self):
+        note = ttk.Notebook(self)
+        note.pack(fill="both", expand=True, padx=8, pady=8)
+
+        self.tab_video = ttk.Frame(note)
+        self.tab_live = ttk.Frame(note)
+        note.add(self.tab_video, text="  Video / Datei  ")
+        note.add(self.tab_live, text="  Live: Gespräch & Anruf  ")
+
+        self._build_video_tab()
+        self._build_live_tab()
+
+        bottom = ttk.Frame(self); bottom.pack(fill="x", padx=10, pady=(0, 6))
+        self.status = tk.StringVar(value="Bereit. Beim ersten Lauf werden KI-Modelle einmalig geladen.")
+        ttk.Label(bottom, textvariable=self.status, anchor="w").pack(side="left", fill="x", expand=True)
+        ttk.Button(bottom, text="Datenschutz", command=self._show_privacy).pack(side="right")
+
+    def _lang_combo(self, parent, var):
+        cb = ttk.Combobox(parent, state="readonly", width=16,
+                          values=[f"{n} ({c})" for c, n in LANGS])
+        idx = [c for c, _ in LANGS].index(var.get())
+        cb.current(idx)
+        cb.bind("<<ComboboxSelected>>",
+                lambda e: var.set(LANGS[cb.current()][0]))
+        return cb
+
+    # ---------------------------------------------------------- Video-Tab --
+    def _build_video_tab(self):
+        f = self.tab_video
+        row = ttk.Frame(f); row.pack(fill="x", pady=8, padx=8)
+        ttk.Button(row, text="Videodatei wählen…", command=self._pick_video).pack(side="left")
+        self.video_path = tk.StringVar()
+        ttk.Label(row, textvariable=self.video_path).pack(side="left", padx=8)
+
+        row2 = ttk.Frame(f); row2.pack(fill="x", pady=4, padx=8)
+        ttk.Label(row2, text="Zielsprache (automatisch aus Systemsprache):").pack(side="left")
+        self.video_tgt = tk.StringVar(value=system_language())
+        self._lang_combo(row2, self.video_tgt).pack(side="left", padx=6)
+        self.btn_video_go = ttk.Button(row2, text="Transkribieren + Übersetzen + Vertonen",
+                                       command=self._run_video)
+        self.btn_video_go.pack(side="left", padx=12)
+
+        ttk.Label(f, text="Transkript (Original):").pack(anchor="w", padx=8)
+        self.txt_orig = tk.Text(f, height=9, wrap="word")
+        self.txt_orig.pack(fill="both", expand=True, padx=8, pady=(0, 6))
+        ttk.Label(f, text="Übersetzung:").pack(anchor="w", padx=8)
+        self.txt_trans = tk.Text(f, height=9, wrap="word")
+        self.txt_trans.pack(fill="both", expand=True, padx=8, pady=(0, 6))
+
+        rowv = ttk.Frame(f); rowv.pack(fill="x", pady=(2, 0), padx=8)
+        self.use_own_voice = tk.BooleanVar(value=True)
+        ttk.Checkbutton(rowv, variable=self.use_own_voice,
+                        text="Meine eigene Stimme verwenden (lokales Stimmprofil aus dem Video; "
+                             "nur nicht-kommerzielle Nutzung)").pack(side="left")
+
+        row3 = ttk.Frame(f); row3.pack(fill="x", pady=6, padx=8)
+        ttk.Button(row3, text="Vertonung erzeugen", command=self._make_audio).pack(side="left")
+        ttk.Separator(row3, orient="vertical").pack(side="left", fill="y", padx=10)
+        ttk.Button(row3, text="⏪ 10 s", command=lambda: self.player.seek(-10)).pack(side="left")
+        self.btn_play = ttk.Button(row3, text="▶ Play", command=self._player_toggle)
+        self.btn_play.pack(side="left", padx=4)
+        ttk.Button(row3, text="⏹ Stopp", command=self._player_stop).pack(side="left")
+        ttk.Button(row3, text="10 s ⏩", command=lambda: self.player.seek(+10)).pack(side="left", padx=4)
+        self.pos_label = tk.StringVar(value="0:00 / 0:00")
+        ttk.Label(row3, textvariable=self.pos_label, width=14).pack(side="left", padx=8)
+
+        row4 = ttk.Frame(f); row4.pack(fill="x", pady=(0, 6), padx=8)
+        ttk.Button(row4, text="Video mit neuer Tonspur speichern…",
+                   command=self._save_video).pack(side="left")
+        ttk.Button(row4, text="Als WAV speichern…", command=self._save_translation).pack(side="left", padx=8)
+        ttk.Button(row4, text="Text speichern…", command=self._save_text).pack(side="left")
+        self._tick_player()
+
+    def _pick_video(self):
+        p = filedialog.askopenfilename(filetypes=[
+            ("Video/Audio", "*.mp4 *.mkv *.avi *.mov *.webm *.mp3 *.wav *.m4a"),
+            ("Alle Dateien", "*.*")])
+        if p:
+            self.video_path.set(p)
+
+    def _run_video(self):
+        path = self.video_path.get()
+        if not path:
+            messagebox.showwarning(APP_TITLE, "Bitte zuerst eine Videodatei wählen.")
+            return
+        self.btn_video_go.config(state="disabled")
+        threading.Thread(target=self._video_worker, args=(path,), daemon=True).start()
+
+    def _video_worker(self, path):
+        try:
+            self._set_status("Transkribiere… (erster Lauf lädt das Whisper-Modell, ~490 MB)")
+            text, src = self.stt.transcribe_file(path)
+            self._set_text(self.txt_orig, text)
+            tgt = self.video_tgt.get()
+            if src != tgt:
+                self._set_status(f"Übersetze {src} → {tgt}…")
+                text_t = self.translator.translate(text, src, tgt)
+            else:
+                text_t = text  # gleiche Sprache: Neuvertonung entfernt den Akzent
+            self._set_text(self.txt_trans, text_t)
+            self._set_status("Fertig. Über 'Übersetzung anhören' oder 'Als WAV speichern' ausgeben.")
+        except Exception as e:
+            self._set_status(f"Fehler: {e}")
+        finally:
+            self.btn_video_go.config(state="normal")
+
+    def _make_audio(self):
+        """Vertonung erzeugen: eigene Stimme (geklont) oder neutrale Stimme."""
+        text = self.txt_trans.get("1.0", "end").strip()
+        if not text:
+            messagebox.showwarning(APP_TITLE, "Keine Übersetzung vorhanden — erst Schritt 'Transkribieren + Übersetzen' ausführen.")
+            return
+        own = self.use_own_voice.get()
+        if own and not self.clone_tts.available():
+            messagebox.showwarning(APP_TITLE, "Stimmen-Klon-Modul (coqui-tts) ist nicht installiert — nutze neutrale Stimme.")
+            own = False
+        if own and not self.video_path.get():
+            messagebox.showwarning(APP_TITLE, "Für die eigene Stimme wird das Video als Stimmreferenz gebraucht — bitte Videodatei wählen.")
+            return
+
+        def worker():
+            try:
+                tgt = self.video_tgt.get()
+                if own:
+                    self._set_status("Erzeuge Stimmprofil aus dem Video…")
+                    sample = engine.extract_voice_sample(
+                        self.video_path.get(),
+                        os.path.join(engine.MODELS_DIR, "stimmprofil.wav"))
+                    self._set_status("Spreche in Ihrer Stimme… (erster Lauf lädt XTTS ~1,9 GB; "
+                                     "die Erzeugung dauert auf CPU mehrere Minuten)")
+                    xtts_lang = {"zh": "zh-cn"}.get(tgt, tgt)
+                    wav, rate = self.clone_tts.synthesize(text, xtts_lang, sample)
+                else:
+                    self._set_status("Erzeuge Sprachausgabe (neutrale Stimme)…")
+                    wav, rate = self.tts.synthesize(text, tgt)
+                self.current_audio = (wav, rate)
+                self.player.load(wav, rate)
+                self._set_status("Vertonung fertig — mit ▶ Play anhören oder Video/WAV speichern.")
+            except Exception as e:
+                self._set_status(f"Fehler bei der Vertonung: {e}")
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _player_toggle(self):
+        if self.current_audio is None:
+            messagebox.showinfo(APP_TITLE, "Erst 'Vertonung erzeugen' ausführen.")
+            return
+        if self.player.playing:
+            self.player.pause()
+        else:
+            self.player.play()
+
+    def _player_stop(self):
+        self.player.pause()
+        self.player.seek(-10**9)
+
+    def _tick_player(self):
+        cur, total = self.player.position()
+        self.pos_label.set(f"{int(cur)//60}:{int(cur)%60:02d} / {int(total)//60}:{int(total)%60:02d}")
+        self.btn_play.config(text="⏸ Pause" if self.player.playing else "▶ Play")
+        self.after(250, self._tick_player)
+
+    def _save_video(self):
+        if self.current_audio is None:
+            messagebox.showinfo(APP_TITLE, "Erst 'Vertonung erzeugen' ausführen.")
+            return
+        if not self.video_path.get():
+            messagebox.showinfo(APP_TITLE, "Kein Originalvideo gewählt.")
+            return
+        dest = filedialog.asksaveasfilename(defaultextension=".mp4",
+                                            filetypes=[("MP4-Video", "*.mp4")])
+        if not dest:
+            return
+        def worker():
+            try:
+                self._set_status("Baue Video mit neuer Tonspur…")
+                wav, rate = self.current_audio
+                tmp = os.path.join(engine.MODELS_DIR, "tonspur_tmp.wav")
+                engine.save_wav(tmp, wav, rate)
+                engine.mux_video_with_audio(self.video_path.get(), tmp, dest)
+                self._set_status(f"Video gespeichert: {dest}")
+            except Exception as e:
+                self._set_status(f"Fehler beim Video-Export: {e}")
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _save_translation(self):
+        if self.current_audio is None:
+            messagebox.showinfo(APP_TITLE, "Erst 'Vertonung erzeugen' ausführen.")
+            return
+        dest = filedialog.asksaveasfilename(defaultextension=".wav",
+                                            filetypes=[("WAV-Audio", "*.wav")])
+        if not dest:
+            return
+        wav, rate = self.current_audio
+        engine.save_wav(dest, wav, rate)
+        self._set_status(f"Gespeichert: {dest}")
+
+    def _save_text(self):
+        text = self.txt_trans.get("1.0", "end").strip()
+        if not text:
+            return
+        dest = filedialog.asksaveasfilename(defaultextension=".txt",
+                                            filetypes=[("Text", "*.txt")])
+        if dest:
+            with open(dest, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            self._set_status(f"Gespeichert: {dest}")
+
+    # ----------------------------------------------------------- Live-Tab --
+    def _build_live_tab(self):
+        f = self.tab_live
+        info = ("Beide Richtungen laufen parallel: Ihre Stimme wird in die Partnersprache "
+                "übersetzt, der Systemton (Teams/Zoom/Video) zurück in Ihre Sprache.\n"
+                "Anruf-Modus: als 'Ausgabe an Partner' das virtuelle Kabel wählen und dieses "
+                "im Call als Mikrofon einstellen. Wichtig: Gesprächspartner müssen der "
+                "Verarbeitung zustimmen (§ 201 StGB).")
+        ttk.Label(f, text=info, wraplength=920, justify="left").pack(anchor="w", padx=8, pady=6)
+
+        grid = ttk.Frame(f); grid.pack(fill="x", padx=8)
+
+        ttk.Label(grid, text="Meine Sprache:").grid(row=0, column=0, sticky="w", pady=3)
+        self.live_my_lang = tk.StringVar(value=system_language())
+        self._lang_combo(grid, self.live_my_lang).grid(row=0, column=1, sticky="w", padx=6)
+
+        ttk.Label(grid, text="Partnersprache:").grid(row=0, column=2, sticky="w", padx=(20, 0))
+        self.live_their_lang = tk.StringVar(value="en")
+        self._lang_combo(grid, self.live_their_lang).grid(row=0, column=3, sticky="w", padx=6)
+
+        ttk.Label(grid, text="Erkennung:").grid(row=0, column=4, sticky="w", padx=(20, 0))
+        self.cb_quality = ttk.Combobox(grid, state="readonly", width=18,
+                                       values=["base (schnell)", "small (genauer)"])
+        self.cb_quality.current(0)
+        self.cb_quality.grid(row=0, column=5, sticky="w", padx=6)
+
+        ttk.Label(grid, text="Mein Mikrofon:").grid(row=1, column=0, sticky="w", pady=3)
+        self.cb_mic = ttk.Combobox(grid, state="readonly", width=42)
+        self.cb_mic.grid(row=1, column=1, columnspan=3, sticky="w", padx=6)
+
+        ttk.Label(grid, text="Partner-Ton (Loopback):").grid(row=2, column=0, sticky="w", pady=3)
+        self.cb_loop = ttk.Combobox(grid, state="readonly", width=42)
+        self.cb_loop.grid(row=2, column=1, columnspan=3, sticky="w", padx=6)
+
+        ttk.Label(grid, text="Ausgabe an mich (Kopfhörer):").grid(row=3, column=0, sticky="w", pady=3)
+        self.cb_out_me = ttk.Combobox(grid, state="readonly", width=42)
+        self.cb_out_me.grid(row=3, column=1, columnspan=3, sticky="w", padx=6)
+
+        ttk.Label(grid, text="Ausgabe an Partner (virt. Kabel):").grid(row=4, column=0, sticky="w", pady=3)
+        self.cb_out_them = ttk.Combobox(grid, state="readonly", width=42)
+        self.cb_out_them.grid(row=4, column=1, columnspan=3, sticky="w", padx=6)
+
+        row = ttk.Frame(f); row.pack(fill="x", padx=8, pady=8)
+        ttk.Button(row, text="Geräte aktualisieren", command=self._refresh_devices).pack(side="left")
+        self.btn_live = ttk.Button(row, text="▶ Live-Übersetzung starten", command=self._toggle_live)
+        self.btn_live.pack(side="left", padx=10)
+        ttk.Label(row, text="Mikrofon-Pegel:").pack(side="left", padx=(20, 4))
+        self.level_bar = ttk.Progressbar(row, length=160, maximum=0.2)
+        self.level_bar.pack(side="left")
+
+        ttk.Label(f, text="Protokoll:").pack(anchor="w", padx=8)
+        self.txt_log = tk.Text(f, height=16, wrap="word", state="disabled")
+        self.txt_log.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+
+        self._refresh_devices()
+
+    def _refresh_devices(self):
+        self.inputs = audio_mod.list_input_devices()
+        self.outputs = audio_mod.list_output_devices()
+        self.loops = audio_mod.list_loopback_sources()
+        self.cb_mic["values"] = [f"{i}: {n}" for i, n in self.inputs]
+        self.cb_out_me["values"] = [f"{i}: {n}" for i, n in self.outputs]
+        self.cb_out_them["values"] = ["(keine — Partner hört mich nicht übersetzt)"] + \
+                                     [f"{i}: {n}" for i, n in self.outputs]
+        self.cb_loop["values"] = ["(keine — Partner wird nicht übersetzt)"] + self.loops
+        # Windows-Standardgeraete vorauswaehlen statt einfach Listenanfang
+        import sounddevice as sd
+        try:
+            def_in, def_out = sd.default.device
+        except Exception:
+            def_in, def_out = -1, -1
+        def select_default(cb, devices, default_idx):
+            if not cb["values"]:
+                return
+            for pos, (i, _) in enumerate(devices):
+                if i == default_idx:
+                    cb.current(pos)
+                    return
+            cb.current(0)
+        select_default(self.cb_mic, self.inputs, def_in)
+        select_default(self.cb_out_me, self.outputs, def_out)
+        self.cb_out_them.current(0)
+        # Loopback: Quelle passend zum Standard-Ausgabegeraet vorauswaehlen
+        self.cb_loop.current(0)
+        try:
+            out_name = dict(self.outputs).get(def_out, "")
+            for pos, name in enumerate(self.loops):
+                if name.split("(")[0].strip() and name.split("(")[0].strip() in out_name:
+                    self.cb_loop.current(pos + 1)  # +1 wegen "(keine)"-Eintrag
+                    break
+        except Exception:
+            pass
+
+    def _toggle_live(self):
+        if self.live_running:
+            self._stop_live()
+        else:
+            self._start_live()
+
+    def _start_live(self):
+        if not messagebox.askyesno(
+                "Einwilligung der Gesprächsteilnehmer",
+                "Der Live-Modus verarbeitet auch die Stimme Ihrer Gesprächspartner.\n\n"
+                "Bestätigen Sie, dass ALLE Beteiligten der Verarbeitung durch diese "
+                "Anwendung zugestimmt haben (§ 201 StGB, Art. 6 DSGVO)?"):
+            return
+        if not self.cb_mic.get():
+            messagebox.showwarning(APP_TITLE, "Kein Mikrofon gewählt.")
+            return
+        mic_idx = int(self.cb_mic.get().split(":")[0])
+        out_me_idx = int(self.cb_out_me.get().split(":")[0])
+        out_them = self.cb_out_them.get()
+        out_them_idx = int(out_them.split(":")[0]) if not out_them.startswith("(") else None
+        loop_name = None if self.cb_loop.get().startswith("(") else self.cb_loop.get()
+
+        my, their = self.live_my_lang.get(), self.live_their_lang.get()
+        model = "small" if "small" in self.cb_quality.get() else "base"
+        if self.stt_live.model_size != model:
+            self.stt_live = engine.SpeechToText(model_size=model)
+        self.live_running = True
+        self.btn_live.config(text="■ Stoppen")
+        self._log(f"Gestartet. Ich: {my} → Partner: {their} (Modell: {model}).")
+        self._log("Beim ersten Satz werden Erkennungs-/Übersetzungsmodelle geladen — "
+                  "der erste Durchlauf kann daher deutlich länger dauern.")
+
+        self.players = {"me": audio_mod.Player(out_me_idx)}
+        if out_them_idx is not None:
+            self.players["them"] = audio_mod.Player(out_them_idx)
+
+        # Richtung 1: mein Mikrofon -> Partnersprache
+        rec_mic = audio_mod.UtteranceRecorder(device_index=mic_idx)
+        rec_mic.start()
+        self.recorders = [rec_mic]
+        t1 = threading.Thread(target=self._direction_worker,
+                              args=(rec_mic, my, their, "them", "Ich"), daemon=True)
+        t1.start()
+        self.live_threads = [t1]
+
+        # Richtung 2: Systemton (Partner) -> meine Sprache
+        if loop_name:
+            rec_loop = audio_mod.UtteranceRecorder(loopback_name=loop_name)
+            rec_loop.start()
+            self.recorders.append(rec_loop)
+            t2 = threading.Thread(target=self._direction_worker,
+                                  args=(rec_loop, their, my, "me", "Partner"), daemon=True)
+            t2.start()
+            self.live_threads.append(t2)
+
+        self._watch_recorders()
+
+    def _watch_recorders(self):
+        """Pegelanzeige aktualisieren und Thread-Fehler der Rekorder sichtbar machen."""
+        if not self.live_running:
+            self.level_bar["value"] = 0
+            return
+        if self.recorders:
+            self.level_bar["value"] = min(0.2, self.recorders[0].level)
+            for r in self.recorders:
+                err = getattr(r, "error", None)
+                if err is not None:
+                    quelle = "Loopback" if r.loopback_name else "Mikrofon"
+                    self._log(f"FEHLER in der {quelle}-Aufnahme: {err}")
+                    r.error = None
+        self.after(100, self._watch_recorders)
+
+    def _stop_live(self):
+        self.live_running = False
+        for r in self.recorders:
+            r.stop()
+        for p in self.players.values():
+            p.stop()
+        self.recorders, self.players = [], {}
+        self.btn_live.config(text="▶ Live-Übersetzung starten")
+        self._log("Gestoppt.")
+
+    def _direction_worker(self, recorder, src, tgt, player_key, label):
+        """Nimmt Äußerungen entgegen, übersetzt und spricht sie aus."""
+        import queue as q
+        while self.live_running:
+            try:
+                utt = recorder.utterances.get(timeout=0.3)
+            except q.Empty:
+                continue
+            try:
+                text, _ = self.stt_live.transcribe(utt, language=src)
+                if not text:
+                    continue
+                text_t = self.translator.translate(text, src, tgt)
+                self._log(f"{label} ({src}): {text}\n   → ({tgt}): {text_t}")
+                wav, rate = self.tts.synthesize(text_t, tgt)
+                player = self.players.get(player_key) or self.players.get("me")
+                if player:
+                    player.play(wav, rate)
+            except Exception as e:
+                self._log(f"Fehler ({label}): {e}")
+
+    # -------------------------------------------------------------- Utils --
+    def _set_status(self, msg):
+        self.after(0, lambda: self.status.set(msg))
+
+    def _set_text(self, widget, text):
+        def do():
+            widget.delete("1.0", "end")
+            widget.insert("1.0", text)
+        self.after(0, do)
+
+    def _log(self, msg):
+        def do():
+            self.txt_log.config(state="normal")
+            self.txt_log.insert("end", msg + "\n")
+            self.txt_log.see("end")
+            self.txt_log.config(state="disabled")
+        self.after(0, do)
+
+
+if __name__ == "__main__":
+    App().mainloop()

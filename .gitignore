@@ -1,0 +1,18 @@
+# Python-Umgebung und Caches
+venv/
+__pycache__/
+*.pyc
+
+# KI-Modelle und heruntergeladene Werkzeuge (mehrere GB, werden zur Laufzeit geladen)
+models/
+tools/
+downloads/
+
+# Persoenliche Einstellungen (enthaelt DSGVO-Einwilligung des jeweiligen Nutzers)
+einstellungen.json
+
+# Test-Artefakte und Logs
+app/*.wav
+app/*.mp4
+app/*.log
+app/output_err.txt
