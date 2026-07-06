@@ -288,9 +288,13 @@ def extract_voice_sample(media_path, out_wav, max_seconds=25):
 
 def mux_video_with_audio(video_path, audio_wav, out_path):
     """Originalvideo (Bild unveraendert) mit neuer Tonspur als MP4 speichern."""
+    import shutil
     import subprocess
-    import imageio_ffmpeg
-    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+    # System-ffmpeg bevorzugen (Raspberry Pi/Linux), sonst mitgeliefertes Binary
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        import imageio_ffmpeg
+        ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
     cmd = [ffmpeg, "-y", "-i", video_path, "-i", audio_wav,
            "-map", "0:v", "-map", "1:a", "-c:v", "copy",
            "-c:a", "aac", "-shortest", out_path]

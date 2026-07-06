@@ -1,0 +1,13 @@
+# Raspberry Pi 4/5 (64-bit Raspberry Pi OS, Python 3.11+)
+# Ohne Windows-Pakete (pyttsx3/comtypes) und ohne Stimmklon (XTTS/torch):
+# XTTS ist auf dem Pi um ein Vielfaches zu langsam — eigene Stimme nur am PC.
+faster-whisper
+argostranslate
+piper-tts
+numpy
+soundfile
+truststore
+# Web-Server
+fastapi
+uvicorn[standard]
+python-multipart

@@ -25,7 +25,8 @@ os.makedirs(JOBS_DIR, exist_ok=True)
 
 app = FastAPI(title="Live-Übersetzer")
 
-stt = engine.SpeechToText(model_size="small")
+# Auf schwacher Hardware (z.B. Raspberry Pi): WHISPER_MODELL=base setzen
+stt = engine.SpeechToText(model_size=os.environ.get("WHISPER_MODELL", "small"))
 translator = engine.Translator()
 tts = engine.TextToSpeech()
 clone = engine.VoiceCloneTTS()
