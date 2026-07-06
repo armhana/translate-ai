@@ -1,7 +1,7 @@
 // Service Worker: macht die Web-Oberfläche als App installierbar
 // (Chrome/Edge auf Windows, Android, Linux, Mac). Statische Dateien werden
 // gecacht; alle API-Aufrufe gehen immer live an den Server.
-const CACHE = "uebersetzer-v1";
+const CACHE = "uebersetzer-v2";
 const SHELL = ["/", "/index.html", "/manifest.json", "/icon.svg"];
 
 self.addEventListener("install", (e) => {

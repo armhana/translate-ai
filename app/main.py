@@ -79,7 +79,11 @@ class ConsentDialog(tk.Toplevel):
         self.title("Einwilligung erforderlich")
         self.accepted = False
         self.transient(parent)
-        self.grab_set()
+        try:
+            self.wait_visibility()   # grab_set schlaegt auf unsichtbarem Fenster fehl
+            self.grab_set()
+        except tk.TclError:
+            pass
         self.protocol("WM_DELETE_WINDOW", self._decline)
         txt = tk.Text(self, wrap="word", width=86, height=22, padx=12, pady=12)
         txt.insert("1.0", DATENSCHUTZ_TEXT)

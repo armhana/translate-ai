@@ -101,11 +101,16 @@ const SPRACHEN = [["de","Deutsch"],["en","Englisch"],["fr","Französisch"],
   ["es","Spanisch"],["it","Italienisch"],["pt","Portugiesisch"],["nl","Niederländisch"],
   ["pl","Polnisch"],["ru","Russisch"],["tr","Türkisch"],["zh","Chinesisch"]];
 
-// Einwilligung
-if (localStorage.getItem("einwilligung") === "ja")
+// Einwilligung — robust auch bei blockiertem Speicher (z.B. privater Modus):
+// der Dialog schließt immer; ohne Speicher wird beim nächsten Besuch erneut gefragt.
+try {
+  if (localStorage.getItem("einwilligung") === "ja")
+    document.getElementById("consent").classList.add("hidden");
+} catch (e) {}
+function zustimmen(){
+  try { localStorage.setItem("einwilligung","ja"); } catch (e) {}
   document.getElementById("consent").classList.add("hidden");
-function zustimmen(){ localStorage.setItem("einwilligung","ja");
-  document.getElementById("consent").classList.add("hidden"); }
+}
 function ablehnen(){ document.body.innerHTML =
   "<p style='padding:24px;font-family:sans-serif;'>Ohne Einwilligung kann die App nicht genutzt werden.</p>"; }
 
