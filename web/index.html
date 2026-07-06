@@ -192,8 +192,8 @@ async function warte(id){
       statusEl.textContent = j.schritt || "Fertig.";
       return;
     }
-    if (j.status === "fehler"){
-      statusEl.textContent = "Fehler: " + j.fehler;
+    if (j.status === "fehler" || j.status === "unbekannt"){
+      statusEl.textContent = "Fehler: " + (j.fehler || "Auftrag unbekannt — bitte Video erneut hochladen.");
       statusEl.className = "status fehler";
       return;
     }
@@ -210,7 +210,11 @@ document.getElementById("neuVertonen").onclick = async () => {
   statusEl.textContent = "Vertone korrigierten Text…";
   document.getElementById("neuVertonen").disabled = true;
   try {
-    await fetch(`/api/neu_vertonen/${aktuellerJob}`, { method:"POST", body:fd });
+    const res = await fetch(`/api/neu_vertonen/${aktuellerJob}`, { method:"POST", body:fd });
+    if (!res.ok) {
+      const info = await res.json().catch(() => ({}));
+      throw new Error(info.fehler || `Server antwortet mit ${res.status}`);
+    }
     await warte(aktuellerJob);
   } catch (e) {
     statusEl.textContent = "Fehler: " + e.message;

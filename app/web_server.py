@@ -6,6 +6,7 @@ Dann am Handy/Browser öffnen:  http://<PC-IP>:8710
 
 Die KI läuft vollständig auf diesem PC; Inhalte verlassen das lokale Netz nicht.
 """
+import json
 import os
 import shutil
 import socket
@@ -32,6 +33,29 @@ tts = engine.TextToSpeech()
 clone = engine.VoiceCloneTTS()
 
 jobs = {}  # id -> {status, schritt, transkript, uebersetzung, fehler}
+
+
+def _speichere_job(job_id):
+    """Auftrag auf Platte sichern — Korrekturen funktionieren so auch nach
+    einem Server-Neustart."""
+    try:
+        with open(os.path.join(JOBS_DIR, f"{job_id}.json"), "w",
+                  encoding="utf-8") as fh:
+            json.dump(jobs[job_id], fh)
+    except Exception:
+        pass
+
+
+def _hole_job(job_id):
+    """Auftrag aus Speicher oder von Platte holen."""
+    if job_id in jobs:
+        return jobs[job_id]
+    try:
+        with open(os.path.join(JOBS_DIR, f"{job_id}.json"), encoding="utf-8") as fh:
+            jobs[job_id] = json.load(fh)
+        return jobs[job_id]
+    except Exception:
+        return None
 
 
 def _warmup():
@@ -109,6 +133,7 @@ def _verarbeite(job_id, video_path, ziel, eigene_stimme, bild_verbessern=False,
     except Exception as e:
         job["status"] = "fehler"
         job["fehler"] = str(e)
+    _speichere_job(job_id)
 
 
 @app.post("/api/auftrag")
@@ -123,6 +148,7 @@ async def auftrag(video: UploadFile, zielsprache: str = Form(...),
                     "transkript": "", "uebersetzung": "", "fehler": "",
                     "_video": video_path, "_ziel": zielsprache,
                     "_eigene_stimme": eigene_stimme}
+    _speichere_job(job_id)
     threading.Thread(target=_verarbeite,
                      args=(job_id, video_path, zielsprache, eigene_stimme,
                            bild_verbessern),
@@ -161,13 +187,16 @@ def _neu_vertonen(job_id, text):
     except Exception as e:
         job["status"] = "fehler"
         job["fehler"] = str(e)
+    _speichere_job(job_id)
 
 
 @app.post("/api/neu_vertonen/{job_id}")
 async def neu_vertonen(job_id: str, text: str = Form(...)):
-    job = jobs.get(job_id)
-    if not job or not job.get("_video"):
-        return JSONResponse({"fehler": "Auftrag unbekannt"}, status_code=404)
+    job = _hole_job(job_id)
+    if not job or not job.get("_video") or not os.path.exists(job["_video"]):
+        return JSONResponse(
+            {"fehler": "Auftrag nicht mehr vorhanden — bitte Video erneut hochladen."},
+            status_code=404)
     if not text.strip():
         return JSONResponse({"fehler": "Text ist leer"}, status_code=400)
     job["status"] = "laeuft"
@@ -179,9 +208,11 @@ async def neu_vertonen(job_id: str, text: str = Form(...)):
 
 @app.get("/api/status/{job_id}")
 def status(job_id: str):
-    job = jobs.get(job_id)
+    job = _hole_job(job_id)
     if not job:
-        return JSONResponse({"status": "unbekannt"}, status_code=404)
+        return JSONResponse({"status": "unbekannt",
+                             "fehler": "Auftrag nicht mehr vorhanden — bitte Video erneut hochladen."},
+                            status_code=404)
     return {k: v for k, v in job.items() if not k.startswith("_")}
 
 

@@ -275,23 +275,27 @@ class VoiceCloneTTS:
         return np.asarray(wav, dtype=np.float32), 24000  # XTTS liefert 24 kHz
 
 
-def extract_voice_sample(media_path, out_wav, max_seconds=25):
-    """Schneidet die ersten Sprech-Sekunden aus einem Video als Stimmreferenz."""
-    import av
-    container = av.open(media_path)
-    resampler = av.AudioResampler(format="s16", layout="mono", rate=SAMPLE_RATE)
-    chunks = []
-    total = 0
-    for frame in container.decode(audio=0):
-        for f in resampler.resample(frame):
-            arr = f.to_ndarray().flatten().astype(np.float32) / 32768.0
-            chunks.append(arr)
-            total += len(arr)
-        if total >= max_seconds * SAMPLE_RATE:
-            break
-    container.close()
-    audio = np.concatenate(chunks)[: max_seconds * SAMPLE_RATE]
-    save_wav(out_wav, audio, SAMPLE_RATE)
+def extract_voice_sample(media_path, out_wav, max_seconds=30):
+    """Saubere Stimmreferenz fuer das Klonen aus einem Video gewinnen.
+
+    Qualitaet der Probe bestimmt massgeblich, wie aehnlich die geklonte Stimme
+    klingt: entrauschen, alle Sprechpausen entfernen (es bleibt nur echte
+    Sprache), Lautheit normalisieren, 24 kHz (XTTS-Konditionierung nutzt
+    22,05 kHz — 16 kHz wuerde Klangfarbe verschenken).
+    """
+    import subprocess
+    filt = (
+        "afftdn=nf=-25,"                                   # Rauschunterdrueckung
+        "silenceremove=start_periods=1:stop_periods=-1:"   # Stille komplett raus
+        "stop_duration=0.35:stop_threshold=-35dB,"
+        "loudnorm=I=-18:TP=-2"                             # Lautheit angleichen
+    )
+    cmd = [_ffmpeg_exe(), "-y", "-i", media_path, "-vn",
+           "-ac", "1", "-ar", "24000", "-af", filt,
+           "-t", str(max_seconds), out_wav]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0 or not os.path.exists(out_wav):
+        raise RuntimeError(f"Stimmprofil fehlgeschlagen: {result.stderr[-300:]}")
     return out_wav
 
 
