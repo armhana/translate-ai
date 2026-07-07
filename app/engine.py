@@ -28,7 +28,21 @@ os.makedirs(MODELS_DIR, exist_ok=True)
 
 SAMPLE_RATE = 16000  # Whisper erwartet 16 kHz mono
 
-# Serialisiert Whisper, Argos und XTTS (siehe OpenMP-Hinweis oben).
+# Alle schweren KI-Operationen (Whisper, Argos, XTTS) laufen in EINEM
+# dedizierten Thread: ctranslate2/torch verklemmen sich auf Windows, wenn
+# Inferenz ueber wechselnde Threads verteilt wird (encode() haengt endlos).
+import concurrent.futures
+_KI_THREAD = concurrent.futures.ThreadPoolExecutor(max_workers=1,
+                                                   thread_name_prefix="ki")
+
+
+def _im_ki_thread(fn, *args, **kwargs):
+    if threading.current_thread().name.startswith("ki"):
+        return fn(*args, **kwargs)  # bereits im KI-Thread (verschachtelter Aufruf)
+    return _KI_THREAD.submit(fn, *args, **kwargs).result()
+
+
+# Rueckwaerts-kompatibel: einzelne Aufrufer halten das Lock zusaetzlich.
 HEAVY_LOCK = threading.RLock()
 
 
@@ -60,27 +74,35 @@ class SpeechToText:
                 )
         return self._model
 
+    def warmup(self):
+        """Modell im KI-Thread vorladen (nie direkt _ensure_model aufrufen)."""
+        _im_ki_thread(self._ensure_model)
+
     def transcribe(self, audio: np.ndarray, language=None):
         """audio: float32 mono 16 kHz. Gibt (text, erkannte_sprache) zurueck."""
+        return _im_ki_thread(self._transcribe_impl, audio, language)
+
+    def _transcribe_impl(self, audio, language):
         model = self._ensure_model()
-        with HEAVY_LOCK, self._lock:
-            segments, info = model.transcribe(
-                audio, language=language, vad_filter=True,
-                beam_size=self.beam_size,
-            )
-            text = " ".join(s.text.strip() for s in segments).strip()
+        segments, info = model.transcribe(
+            audio, language=language, vad_filter=True,
+            beam_size=self.beam_size,
+        )
+        text = " ".join(s.text.strip() for s in segments).strip()
         return text, info.language
 
     def transcribe_file(self, path, language=None, on_segment=None):
         """Transkribiert eine Video-/Audiodatei (Dekodierung uebernimmt PyAV)."""
+        return _im_ki_thread(self._transcribe_file_impl, path, language, on_segment)
+
+    def _transcribe_file_impl(self, path, language, on_segment):
         model = self._ensure_model()
-        with HEAVY_LOCK, self._lock:
-            segments, info = model.transcribe(path, language=language, vad_filter=True)
-            parts = []
-            for s in segments:
-                parts.append(s.text.strip())
-                if on_segment:
-                    on_segment(s.start, s.end, s.text.strip())
+        segments, info = model.transcribe(path, language=language, vad_filter=True)
+        parts = []
+        for s in segments:
+            parts.append(s.text.strip())
+            if on_segment:
+                on_segment(s.start, s.end, s.text.strip())
         return " ".join(parts).strip(), info.language
 
 
@@ -123,8 +145,7 @@ class Translator:
         if not self._ensure_pair(src, tgt):
             raise RuntimeError(f"Kein Uebersetzungspaket fuer {src}->{tgt} verfuegbar")
         import argostranslate.translate
-        with HEAVY_LOCK:
-            return argostranslate.translate.translate(text, src, tgt)
+        return _im_ki_thread(argostranslate.translate.translate, text, src, tgt)
 
 
 # Piper-Stimmen je Sprache (werden bei Bedarf von HuggingFace geladen, danach offline)
@@ -286,12 +307,30 @@ class VoiceCloneTTS:
             self._tts = CoquiTTS("tts_models/multilingual/multi-dataset/xtts_v2")
         return self._tts
 
-    def synthesize(self, text, lang, speaker_wav_path):
-        """Gibt (float32-Array, Samplerate) in der geklonten Stimme zurueck."""
-        with HEAVY_LOCK, self._lock:
-            tts = self._ensure_model()
-            wav = tts.tts(text=text, speaker_wav=speaker_wav_path, language=lang)
-        return np.asarray(wav, dtype=np.float32), 24000  # XTTS liefert 24 kHz
+    def synthesize(self, text, lang, speaker_wav_path, on_progress=None):
+        """Gibt (float32-Array, Samplerate) in der geklonten Stimme zurueck.
+
+        Satzweise Synthese: ermoeglicht Fortschrittsanzeige (on_progress(i, n))
+        und umgeht die Token-Grenze von XTTS bei sehr langen Texten.
+        """
+        import re
+        saetze = [s.strip() for s in re.split(r"(?<=[.!?…])\s+", text) if s.strip()]
+        if not saetze:
+            saetze = [text]
+        pause = np.zeros(int(24000 * 0.25), dtype=np.float32)
+
+        def _synth_alle():
+            tts = self._ensure_model_locked()
+            teile = []
+            for i, satz in enumerate(saetze):
+                wav = tts.tts(text=satz, speaker_wav=speaker_wav_path, language=lang)
+                teile.append(np.asarray(wav, dtype=np.float32))
+                teile.append(pause)
+                if on_progress:
+                    on_progress(i + 1, len(saetze))
+            return np.concatenate(teile)
+
+        return _im_ki_thread(_synth_alle), 24000  # XTTS liefert 24 kHz
 
 
 def extract_voice_sample(media_path, out_wav, max_seconds=30):
@@ -316,6 +355,18 @@ def extract_voice_sample(media_path, out_wav, max_seconds=30):
     if result.returncode != 0 or not os.path.exists(out_wav):
         raise RuntimeError(f"Stimmprofil fehlgeschlagen: {result.stderr[-300:]}")
     return out_wav
+
+
+def media_duration(media_path):
+    """Laufzeit der Datei in Sekunden (0, wenn unbekannt)."""
+    try:
+        import av
+        with av.open(media_path) as container:
+            if container.duration:
+                return float(container.duration) / 1_000_000
+    except Exception:
+        pass
+    return 0.0
 
 
 def has_video_stream(media_path):

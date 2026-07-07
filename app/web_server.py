@@ -11,6 +11,7 @@ import os
 import shutil
 import socket
 import threading
+import time
 import uuid
 
 from fastapi import FastAPI, UploadFile, Form
@@ -84,11 +85,9 @@ _repariere_unterbrochene_jobs()
 
 def _warmup():
     """Whisper beim Serverstart laden — der erste Auftrag zahlt sonst die
-    Ladezeit obendrauf. XTTS bewusst NICHT vorwaermen: torch parallel zu
-    ctranslate2 provoziert den OpenMP-Konflikt (haengende Inferenz); es
-    laedt beim ersten Eigene-Stimme-Auftrag unter dem globalen Lock."""
+    Ladezeit obendrauf. Laeuft wie alle KI-Arbeit im dedizierten KI-Thread."""
     try:
-        stt._ensure_model()
+        stt.warmup()
     except Exception:
         pass  # Warmup darf nie den Serverstart verhindern
 
@@ -96,9 +95,26 @@ def _warmup():
 threading.Thread(target=_warmup, daemon=True).start()
 
 
+def _fortschritt_helfer(job):
+    """Liefert eine Funktion, die Fortschritt (0-100) und Restzeit setzt."""
+    start = time.time()
+
+    def setze(prozent):
+        p = max(1, min(99, int(prozent)))
+        job["fortschritt"] = p
+        if p >= 5:
+            verstrichen = time.time() - start
+            job["rest_sekunden"] = int(verstrichen * (100 - p) / p)
+    return setze
+
+
 def _verarbeite(job_id, video_path, ziel, eigene_stimme, bild_stufe="aus",
                 quell=None):
     job = jobs[job_id]
+    fortschritt = _fortschritt_helfer(job)
+    # Phasen-Anteile: mit eigener Stimme dominiert die XTTS-Synthese
+    t_span = 15 if eigene_stimme else 70   # Transkription bis hierhin
+    tts_bis = 95
     try:
         hat_video = engine.has_video_stream(video_path)
         job["hat_video"] = hat_video
@@ -123,24 +139,40 @@ def _verarbeite(job_id, video_path, ziel, eigene_stimme, bild_stufe="aus",
             video_quelle_fuer_bild = besser
 
         job["schritt"] = "Transkribiere (Whisper)…"
-        text, quelle = stt.transcribe_file(video_path, language=quell)
+        dauer = engine.media_duration(video_path)
+
+        def bei_segment(start_s, ende_s, _txt):
+            if dauer > 0:
+                fortschritt(1 + (ende_s / dauer) * (t_span - 1))
+
+        text, quelle = stt.transcribe_file(video_path, language=quell,
+                                           on_segment=bei_segment)
         job["transkript"] = text
+        fortschritt(t_span)
         if quelle != ziel:
             job["schritt"] = f"Übersetze {quelle} → {ziel}…"
             text_t = translator.translate(text, quelle, ziel)
         else:
             text_t = text  # gleiche Sprache: Neuvertonung entfernt den Akzent
         job["uebersetzung"] = text_t
+        fortschritt(t_span + 5)
 
         if eigene_stimme and clone.available():
             job["schritt"] = "Erzeuge Stimmprofil & spreche in eigener Stimme (dauert)…"
             sample = engine.extract_voice_sample(
                 video_path, os.path.join(JOBS_DIR, f"{job_id}_profil.wav"))
             xtts_lang = {"zh": "zh-cn"}.get(ziel, ziel)
-            wav, rate = clone.synthesize(text_t, xtts_lang, sample)
+
+            def bei_satz(i, n):
+                job["schritt"] = f"Spreche in eigener Stimme — Satz {i} von {n}…"
+                fortschritt(t_span + 5 + (i / n) * (tts_bis - t_span - 5))
+
+            wav, rate = clone.synthesize(text_t, xtts_lang, sample,
+                                         on_progress=bei_satz)
         else:
             job["schritt"] = "Erzeuge Sprachausgabe (neutrale Stimme)…"
             wav, rate = tts.synthesize(text_t, ziel)
+        fortschritt(tts_bis)
 
         audio_path = os.path.join(JOBS_DIR, f"{job_id}.wav")
         engine.save_wav(audio_path, wav, rate)
@@ -158,6 +190,8 @@ def _verarbeite(job_id, video_path, ziel, eigene_stimme, bild_stufe="aus",
 
         job["status"] = "fertig"
         job["schritt"] = "Fertig."
+        job["fortschritt"] = 100
+        job["rest_sekunden"] = 0
     except Exception as e:
         job["status"] = "fehler"
         job["fehler"] = str(e)
@@ -191,6 +225,7 @@ def _neu_vertonen(job_id, text):
     """Korrigierten Text neu vertonen und Video neu bauen (Video/Stimmprofil
     werden wiederverwendet — deutlich schneller als ein kompletter Durchlauf)."""
     job = jobs[job_id]
+    fortschritt = _fortschritt_helfer(job)
     try:
         ziel = job["_ziel"]
         profil = os.path.join(JOBS_DIR, f"{job_id}_profil.wav")
@@ -200,10 +235,17 @@ def _neu_vertonen(job_id, text):
                 engine.extract_voice_sample(job["_video"], profil)
             job["schritt"] = "Spreche korrigierten Text in eigener Stimme…"
             xtts_lang = {"zh": "zh-cn"}.get(ziel, ziel)
-            wav, rate = clone.synthesize(text, xtts_lang, profil)
+
+            def bei_satz(i, n):
+                job["schritt"] = f"Spreche korrigierten Text — Satz {i} von {n}…"
+                fortschritt(5 + (i / n) * 85)
+
+            wav, rate = clone.synthesize(text, xtts_lang, profil,
+                                         on_progress=bei_satz)
         else:
             job["schritt"] = "Spreche korrigierten Text (neutrale Stimme)…"
             wav, rate = tts.synthesize(text, ziel)
+        fortschritt(92)
         audio_path = os.path.join(JOBS_DIR, f"{job_id}.wav")
         engine.save_wav(audio_path, wav, rate)
 
@@ -216,6 +258,8 @@ def _neu_vertonen(job_id, text):
         job["uebersetzung"] = text
         job["status"] = "fertig"
         job["schritt"] = "Fertig (mit Korrektur neu vertont)."
+        job["fortschritt"] = 100
+        job["rest_sekunden"] = 0
     except Exception as e:
         job["status"] = "fehler"
         job["fehler"] = str(e)

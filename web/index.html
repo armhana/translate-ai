@@ -200,14 +200,28 @@ document.getElementById("uebersetzung").addEventListener("input", () => {
   document.getElementById("textHinweis").classList.toggle("hidden", !geaendert);
 });
 
+function restzeitText(sek){
+  if (sek == null) return "";
+  if (sek < 90) return ` · noch ca. ${Math.max(5, Math.round(sek / 5) * 5)} Sek.`;
+  return ` · noch ca. ${Math.round(sek / 60)} Min.`;
+}
+
 async function warte(id, fortgesetzt){
   aktuellerJob = id;
-  const start = Date.now();
+  const prog = document.getElementById("prog");
   for(;;){
     const j = await (await fetch(`/api/status/${id}`)).json();
-    const min = Math.floor((Date.now() - start) / 60000);
-    statusEl.textContent = (j.schritt || j.status) +
-      (j.status === "laeuft" && min >= 1 ? ` (läuft seit ${min} Min. — Seite darf geschlossen werden, der Auftrag läuft auf dem Server weiter)` : "");
+    if (j.status === "laeuft"){
+      prog.classList.remove("hidden");
+      if (j.fortschritt){ prog.value = j.fortschritt; prog.max = 100; }
+      else { prog.removeAttribute("value"); }
+      const prozent = j.fortschritt ? ` — ${j.fortschritt} %` : "";
+      statusEl.textContent = (j.schritt || "") + prozent + restzeitText(j.rest_sekunden) +
+        " (Seite darf geschlossen werden — der Auftrag läuft auf dem Server weiter)";
+    } else {
+      prog.classList.add("hidden");
+      statusEl.textContent = j.schritt || j.status;
+    }
     if (j.status === "fertig"){
       // Cache-Busting: nach Neu-Vertonung frische Dateien laden
       const v = Date.now();

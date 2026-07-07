@@ -291,7 +291,13 @@ class App(tk.Tk):
     def _video_worker(self, path):
         try:
             self._set_status("Transkribiere… (erster Lauf lädt das Whisper-Modell, ~490 MB)")
-            text, src = self.stt.transcribe_file(path)
+            dauer = engine.media_duration(path)
+
+            def bei_segment(start_s, ende_s, _txt):
+                if dauer > 0:
+                    self._set_status(f"Transkribiere… {min(99, int(ende_s / dauer * 100))} %")
+
+            text, src = self.stt.transcribe_file(path, on_segment=bei_segment)
             self._set_text(self.txt_orig, text)
             tgt = self.video_tgt.get()
             if src != tgt:
@@ -336,7 +342,13 @@ class App(tk.Tk):
                     self._set_status("Spreche in Ihrer Stimme… (erster Lauf lädt XTTS ~1,9 GB; "
                                      "die Erzeugung dauert auf CPU mehrere Minuten)")
                     xtts_lang = {"zh": "zh-cn"}.get(tgt, tgt)
-                    wav, rate = self.clone_tts.synthesize(text, xtts_lang, sample)
+
+                    def bei_satz(i, n):
+                        self._set_status(f"Spreche in Ihrer Stimme — Satz {i} von {n} "
+                                         f"({int(i / n * 100)} %)…")
+
+                    wav, rate = self.clone_tts.synthesize(text, xtts_lang, sample,
+                                                          on_progress=bei_satz)
                 else:
                     self._set_status("Erzeuge Sprachausgabe (neutrale Stimme)…")
                     wav, rate = self.tts.synthesize(text, tgt)
@@ -587,7 +599,7 @@ class App(tk.Tk):
         # ohne Modell-Ladepause uebersetzt wird
         def warmup():
             try:
-                self.stt_live._ensure_model()
+                self.stt_live.warmup()
                 self.translator._ensure_pair(my, their)
                 self.translator._ensure_pair(their, my)
             except Exception:
