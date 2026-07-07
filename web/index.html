@@ -57,7 +57,9 @@
     <label class="check" style="margin-top:10px;">
       <input type="checkbox" id="eigeneStimme" checked>
       <span>Meine eigene Stimme verwenden (Stimmprofil aus dem Video;
-      nur nicht-kommerzielle Nutzung; Erzeugung dauert einige Minuten)</span>
+      nur nicht-kommerzielle Nutzung). <b>Achtung:</b> rechenintensiv —
+      bei langen Videos bis zu 1 Stunde; die Seite darf währenddessen
+      geschlossen werden, das Ergebnis wartet hier.</span>
     </label>
     <label class="check" style="margin-top:10px;">
       <input type="checkbox" id="bildVerbessern">
@@ -154,6 +156,7 @@ document.getElementById("los").onclick = async () => {
   try {
     const res = await fetch("/api/auftrag", { method:"POST", body:fd });
     const { job_id } = await res.json();
+    try { localStorage.setItem("letzterJob", job_id); } catch (e) {}
     await warte(job_id);
   } catch (e) {
     statusEl.textContent = "Fehler: " + e.message;
@@ -167,6 +170,18 @@ document.getElementById("los").onclick = async () => {
 let aktuellerJob = null;
 let gesprochenerText = null;  // Text der zuletzt erzeugten Vertonung
 
+// Laufenden/fertigen Auftrag nach Seiten-Reload wiederfinden — wichtig,
+// weil lange Videos mit eigener Stimme bis zu einer Stunde rechnen und
+// das Handy die Seite zwischendurch gern neu lädt.
+window.addEventListener("load", () => {
+  let letzter = null;
+  try { letzter = localStorage.getItem("letzterJob"); } catch (e) {}
+  if (letzter) {
+    statusEl.textContent = "Setze letzten Auftrag fort…";
+    warte(letzter);
+  }
+});
+
 // Warnung zeigen, sobald der Text von der letzten Vertonung abweicht
 document.getElementById("uebersetzung").addEventListener("input", () => {
   const geaendert = document.getElementById("uebersetzung").value.trim() !== gesprochenerText;
@@ -175,9 +190,12 @@ document.getElementById("uebersetzung").addEventListener("input", () => {
 
 async function warte(id){
   aktuellerJob = id;
+  const start = Date.now();
   for(;;){
     const j = await (await fetch(`/api/status/${id}`)).json();
-    statusEl.textContent = j.schritt || j.status;
+    const min = Math.floor((Date.now() - start) / 60000);
+    statusEl.textContent = (j.schritt || j.status) +
+      (j.status === "laeuft" && min >= 1 ? ` (läuft seit ${min} Min. — Seite darf geschlossen werden, der Auftrag läuft auf dem Server weiter)` : "");
     if (j.status === "fertig"){
       // Cache-Busting: nach Neu-Vertonung frische Dateien laden
       const v = Date.now();

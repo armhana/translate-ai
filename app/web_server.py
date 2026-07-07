@@ -58,6 +58,30 @@ def _hole_job(job_id):
         return None
 
 
+def _repariere_unterbrochene_jobs():
+    """Beim Serverstart: Auftraege, die beim letzten Lauf mitten in der
+    Verarbeitung abgebrochen wurden, klar als Fehler markieren — sonst
+    stehen sie fuer immer auf 'laeuft'."""
+    for name in os.listdir(JOBS_DIR):
+        if not name.endswith(".json"):
+            continue
+        path = os.path.join(JOBS_DIR, name)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+            if data.get("status") == "laeuft":
+                data["status"] = "fehler"
+                data["fehler"] = ("Verarbeitung wurde unterbrochen (Server-Neustart). "
+                                  "Bitte erneut starten.")
+                with open(path, "w", encoding="utf-8") as fh:
+                    json.dump(data, fh)
+        except Exception:
+            pass
+
+
+_repariere_unterbrochene_jobs()
+
+
 def _warmup():
     """Modelle beim Serverstart in den Speicher laden — der erste Auftrag
     zahlt sonst zusaetzlich den kompletten Modell-Load (5-30 s)."""
