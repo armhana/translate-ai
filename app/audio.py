@@ -175,13 +175,31 @@ class UtteranceRecorder:
 class SeekablePlayer:
     """Audio-Player mit Play/Pause/Stopp und Spulen (fuer den Video-Tab)."""
 
-    def __init__(self):
+    def __init__(self, device_index=None):
         self.audio = np.zeros(0, dtype=np.float32)
         self.rate = SAMPLE_RATE
         self.pos = 0
         self.playing = False
+        self.device_index = device_index  # None = Windows-Standardausgabe
         self._stream = None
         self._lock = threading.Lock()
+
+    def set_device(self, device_index):
+        """Ausgabegeraet wechseln; Position bleibt erhalten."""
+        with self._lock:
+            pos = self.pos
+        war_aktiv = self.playing
+        self.playing = False
+        if self._stream is not None:
+            self._stream.stop()
+            self._stream.close()
+            self._stream = None
+        self.device_index = device_index
+        with self._lock:
+            self.pos = pos
+        if war_aktiv and len(self.audio):
+            self._ensure_stream()
+            self.playing = True
 
     def load(self, audio: np.ndarray, rate: int):
         self.stop()
@@ -205,7 +223,8 @@ class SeekablePlayer:
                     if self.pos >= len(self.audio):
                         self.playing = False
             self._stream = sd.OutputStream(samplerate=self.rate, channels=1,
-                                           dtype="float32", callback=callback)
+                                           dtype="float32", callback=callback,
+                                           device=self.device_index)
             self._stream.start()
 
     def play(self):

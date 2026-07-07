@@ -244,6 +244,26 @@ class App(tk.Tk):
         ttk.Label(row3, textvariable=self.pos_label, width=13,
                   foreground="#6b7280").pack(side="left", padx=8)
 
+        ttk.Label(row3, text="🔊 Ausgabe:").pack(side="left", padx=(10, 4))
+        self.cb_video_out = ttk.Combobox(row3, state="readonly", width=30)
+        self._video_outputs = audio_mod.list_output_devices()
+        self.cb_video_out["values"] = [f"{i}: {n}" for i, n in self._video_outputs]
+        try:
+            import sounddevice as sd
+            def_out = sd.default.device[1]
+            for pos, (i, _) in enumerate(self._video_outputs):
+                if i == def_out:
+                    self.cb_video_out.current(pos)
+                    break
+            else:
+                if self._video_outputs:
+                    self.cb_video_out.current(0)
+        except Exception:
+            if self._video_outputs:
+                self.cb_video_out.current(0)
+        self.cb_video_out.pack(side="left")
+        self.cb_video_out.bind("<<ComboboxSelected>>", self._video_out_changed)
+
         row4 = ttk.Frame(f); row4.pack(fill="x", pady=(0, 4))
         ttk.Button(row4, text="③ 💾 Video mit neuer Tonspur speichern…", style="Accent.TButton",
                    command=self._save_video).pack(side="left")
@@ -301,6 +321,7 @@ class App(tk.Tk):
         if own and not self.video_path.get():
             messagebox.showwarning(APP_TITLE, "Für die eigene Stimme wird das Video als Stimmreferenz gebraucht — bitte Videodatei wählen.")
             return
+        geraet = self._aktives_ausgabegeraet()
 
         def worker():
             try:
@@ -325,12 +346,25 @@ class App(tk.Tk):
                     self.player.pos = max(0, int(len(wav) * start_fraction - 2 * rate))
                 if autoplay:
                     self.player.play()
-                    self._set_status("Vertonung (neu) erzeugt — Wiedergabe läuft ab der Korrekturstelle.")
+                    self._set_status(f"Vertonung (neu) erzeugt — Wiedergabe ab der Korrekturstelle über: {geraet}")
                 else:
                     self._set_status("Vertonung fertig — mit ▶ Play anhören oder Video/WAV speichern.")
             except Exception as e:
                 self._set_status(f"Fehler bei der Vertonung: {e}")
         threading.Thread(target=worker, daemon=True).start()
+
+    def _video_out_changed(self, event=None):
+        """Wiedergabegeraet fuer den Video-Tab wechseln."""
+        auswahl = self.cb_video_out.get()
+        if not auswahl:
+            return
+        idx = int(auswahl.split(":")[0])
+        self.player.set_device(idx)
+        self._set_status(f"Wiedergabe-Gerät: {auswahl.split(':', 1)[1].strip()}")
+
+    def _aktives_ausgabegeraet(self):
+        auswahl = self.cb_video_out.get()
+        return auswahl.split(":", 1)[1].strip() if ":" in auswahl else "Standard"
 
     def _player_toggle(self):
         text = self.txt_trans.get("1.0", "end").strip()
@@ -349,6 +383,7 @@ class App(tk.Tk):
             self.player.pause()
         else:
             self.player.play()
+            self._set_status(f"Wiedergabe läuft — über: {self._aktives_ausgabegeraet()}")
 
     def _player_stop(self):
         self.player.pause()
