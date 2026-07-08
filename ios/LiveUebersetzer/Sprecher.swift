@@ -24,6 +24,15 @@ final class Sprecher: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
         AVSpeechSynthesizer.requestPersonalVoiceAuthorization { _ in }
     }
 
+    /// Ohne .playback-Kategorie bleibt die Sprachausgabe bei aktiviertem
+    /// Stummschalter des iPhones KOMPLETT stumm — haeufigster Grund fuer
+    /// "Play tut nichts".
+    private func aktiviereAudio() {
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.playback, mode: .spokenAudio)
+        try? session.setActive(true)
+    }
+
     func playPause(text: String, sprache: String, eigeneStimme: Bool) {
         if synth.isSpeaking && !synth.isPaused {
             synth.pauseSpeaking(at: .word)
@@ -36,6 +45,7 @@ final class Sprecher: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
             return
         }
         // Neu starten: Text in Sätze teilen, damit Spulen möglich ist
+        aktiviereAudio()
         self.sprache = sprache
         self.eigeneStimme = eigeneStimme
         saetze = text.split(whereSeparator: { ".!?".contains($0) })
