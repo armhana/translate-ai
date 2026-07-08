@@ -92,9 +92,20 @@ ca. 45–60 Minuten (inkl. Downloads).
 - **Sprachpakete**: Beim ersten Übersetzen fragt iOS einmalig, ob es das
   Sprachpaket (z. B. Deutsch↔Englisch) laden darf — zustimmen, danach
   ist auch das offline.
-- **Personal Voice** klingt am natürlichsten in der Sprache, in der du sie
-  trainiert hast (Deutsch). Für den Anwendungsfall „Akzent entfernen"
-  (Deutsch→Deutsch) ist sie ideal.
+- **Personal Voice** ist ein Klon deiner Stimme **inklusive Sprechweise** —
+  sie wird nur in ihrer Trainingssprache (Deutsch) verwendet. Für
+  „Akzent entfernen" (Deutsch→Deutsch) ist sie ideal; fremde Zielsprachen
+  spricht stattdessen die beste installierte native Stimme (die App zeigt
+  unter dem Player an, welche Stimme gerade spricht).
+- **Bessere Stimmen laden (sehr empfohlen!):** Die vorinstallierten
+  Kompaktstimmen klingen blechern. Natürliche Stimmen laden unter
+  *Einstellungen → Bedienungshilfen → Gesprochene Inhalte → Stimmen* →
+  Sprache wählen → eine Stimme mit **(Premium)** oder **(Enhanced)**
+  herunterladen (im WLAN, je ~100–300 MB). Die App nutzt automatisch die
+  beste vorhandene.
+- **Eigene Stimme, die in JEDER Sprache nativ klingt**, kann nur die
+  PC-Version (XTTS-Stimmklon) — Apples Personal Voice ist auf die
+  Trainingssprache beschränkt.
 - Der Code ist ein **ungetestetes Grundgerüst** — auf einem Windows-PC
   geschrieben. Wenn Xcode beim Bauen Fehler zeigt: Fehlermeldung kopieren
   und mir schicken, ich liefere die Korrektur.

@@ -109,6 +109,11 @@ struct ContentView: View {
                     }
                     .buttonStyle(.borderless)
                     .disabled(uebersetzung.isEmpty)
+                    if !sprecher.stimmenInfo.isEmpty {
+                        Text(sprecher.stimmenInfo)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 Section { Text(status).font(.footnote).foregroundStyle(.secondary) }

@@ -10,6 +10,7 @@ import SwiftUI
 @MainActor
 final class Sprecher: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
     @Published var spielt = false
+    @Published var stimmenInfo = ""   // zeigt an, welche Stimme gerade spricht
 
     private let synth = AVSpeechSynthesizer()
     private var saetze: [String] = []
@@ -82,13 +83,38 @@ final class Sprecher: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
     }
 
     private func passendeStimme() -> AVSpeechSynthesisVoice? {
-        if eigeneStimme {
-            // Personal Voice: die vom Nutzer selbst trainierte Stimme
-            if let pv = AVSpeechSynthesisVoice.speechVoices()
-                .first(where: { $0.voiceTraits.contains(.isPersonalVoice) }) {
-                return pv
+        let alle = AVSpeechSynthesisVoice.speechVoices()
+
+        // Personal Voice NUR in ihrer Trainingssprache verwenden — auf
+        // Fremdsprachen angewendet klingt sie stark akzentbehaftet.
+        if eigeneStimme,
+           let pv = alle.first(where: { $0.voiceTraits.contains(.isPersonalVoice)
+                                        && $0.language.hasPrefix(sprache) }) {
+            stimmenInfo = "Es spricht: deine Personal Voice"
+            return pv
+        }
+
+        // Sonst: beste NATIVE Stimme der Zielsprache (Premium > Enhanced >
+        // Standard). Die Standard-Kompaktstimmen klingen blechern.
+        func guete(_ v: AVSpeechSynthesisVoice) -> Int {
+            switch v.quality {
+            case .premium: return 3
+            case .enhanced: return 2
+            default: return 1
             }
         }
+        let kandidaten = alle.filter { $0.language.hasPrefix(sprache)
+                                       && !$0.voiceTraits.contains(.isPersonalVoice) }
+        if let beste = kandidaten.max(by: { guete($0) < guete($1) }) {
+            let stufe = ["", " (Standard — bessere Stimme ladbar, siehe Anleitung)",
+                         " (Enhanced)", " (Premium)"][guete(beste)]
+            stimmenInfo = "Es spricht: \(beste.name)\(stufe)"
+            if eigeneStimme {
+                stimmenInfo += " — Personal Voice spricht nur Deutsch"
+            }
+            return beste
+        }
+        stimmenInfo = "Keine Stimme für „\(sprache)" installiert"
         return AVSpeechSynthesisVoice(language: sprache)
     }
 
