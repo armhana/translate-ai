@@ -198,6 +198,51 @@ def _verarbeite(job_id, video_path, ziel, eigene_stimme, bild_stufe="aus",
     _speichere_job(job_id)
 
 
+def _verarbeite_text(job_id, text, quell, ziel):
+    """Reiner Text-Auftrag: uebersetzen und vertonen (neutrale Stimme —
+    ohne Video/Audio gibt es keine Stimmprobe fuers Klonen)."""
+    job = jobs[job_id]
+    fortschritt = _fortschritt_helfer(job)
+    try:
+        job["hat_video"] = False
+        job["transkript"] = text
+        if quell != ziel:
+            job["schritt"] = f"Übersetze {quell} → {ziel}…"
+            text_t = translator.translate(text, quell, ziel)
+        else:
+            text_t = text
+        job["uebersetzung"] = text_t
+        fortschritt(40)
+        job["schritt"] = "Erzeuge Sprachausgabe (neutrale Stimme)…"
+        wav, rate = tts.synthesize(text_t, ziel)
+        fortschritt(90)
+        engine.save_wav(os.path.join(JOBS_DIR, f"{job_id}.wav"), wav, rate)
+        job["status"] = "fertig"
+        job["schritt"] = "Fertig."
+        job["fortschritt"] = 100
+        job["rest_sekunden"] = 0
+    except Exception as e:
+        job["status"] = "fehler"
+        job["fehler"] = str(e)
+    _speichere_job(job_id)
+
+
+@app.post("/api/text_auftrag")
+async def text_auftrag(text: str = Form(...), zielsprache: str = Form(...),
+                       quellsprache: str = Form("de")):
+    if not text.strip():
+        return JSONResponse({"fehler": "Text ist leer"}, status_code=400)
+    job_id = uuid.uuid4().hex[:12]
+    jobs[job_id] = {"status": "laeuft", "schritt": "In Warteschlange…",
+                    "transkript": "", "uebersetzung": "", "fehler": "",
+                    "_video": "", "_ziel": zielsprache, "_eigene_stimme": False}
+    _speichere_job(job_id)
+    threading.Thread(target=_verarbeite_text,
+                     args=(job_id, text.strip(), quellsprache, zielsprache),
+                     daemon=True).start()
+    return {"job_id": job_id}
+
+
 @app.post("/api/auftrag")
 async def auftrag(video: UploadFile, zielsprache: str = Form(...),
                   eigene_stimme: bool = Form(False),

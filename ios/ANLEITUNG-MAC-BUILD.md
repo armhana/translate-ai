@@ -43,7 +43,7 @@ ca. 45–60 Minuten (inkl. Downloads).
      `git clone https://github.com/armhana/echome-ai.git`
      (oder auf GitHub: *Code → Download ZIP*)
    - Im Finder den Ordner `echome-ai/ios/EchoMe/` öffnen und
-     **alle fünf .swift-Dateien** in den Xcode-Projektnavigator ziehen
+     **alle sechs .swift-Dateien** in den Xcode-Projektnavigator ziehen
      (linke Spalte, auf den gelben Ordner `EchoMe`).
      Im Dialog: „Copy items if needed" ✓ → Finish.
    - Die von Xcode selbst erzeugten `ContentView.swift` und
@@ -57,6 +57,7 @@ ca. 45–60 Minuten (inkl. Downloads).
      |---|---|
      | `Privacy - Speech Recognition Usage Description` | Transkribiert Ihre Videos lokal auf dem Gerät. |
      | `Privacy - Photo Library Usage Description` | Wählt das zu übersetzende Video aus Ihrer Mediathek. |
+     | `Privacy - Microphone Usage Description` | Live-Mithören: erkennt Sprache in Ihrer Umgebung, lokal auf dem Gerät. |
 5. **Signieren**: Reiter **Signing & Capabilities** →
    „Automatically manage signing" ✓ → bei *Team* → „Add an Account…" →
    mit deiner Apple-ID anmelden → dein „(Personal Team)" auswählen.
@@ -125,6 +126,7 @@ ca. 45–60 Minuten (inkl. Downloads).
 | „codesign möchte auf den Schlüssel … zugreifen" | Teil 3, Schritt 4: **Mac-Anmeldepasswort** (nicht iCloud!) + „Immer erlauben" |
 | „Could not launch … untrusted developer" | Teil 3, Schritt 5: unter *Allgemein → VPN & Geräteverwaltung* vertrauen (Internet nötig; Punkt erscheint erst nach Installation) |
 | „Cannot find 'X' in scope" / „does not conform to protocol" | Fehlender Import oben in der Datei — Datei aktuell aus dem Repo übernehmen und Meldung melden |
-| App startet, stürzt bei Videoauswahl ab | Teil 2, Schritt 4: die zwei Privacy-Einträge fehlen |
+| App startet, stürzt bei Videoauswahl ab | Teil 2, Schritt 4: die Privacy-Einträge fehlen |
+| Absturz beim Start von „Live mithören" | Privacy-Eintrag *Microphone Usage Description* fehlt (Teil 2, Schritt 4) |
 | „Übersetzung fehlgeschlagen: translation request empty" | Video enthielt keine erkennbare Sprache — oder alte Codefassung: `ContentView.swift` aktuell aus dem Repo übernehmen |
 | Play drückt sich, aber kein Ton | 1. **Stummschalter** des iPhones war die Ursache älterer Codefassungen — `Sprecher.swift` aktualisieren, dann spielt es trotz Lautlos · 2. Lautstärke hoch · 3. verbundenen Bluetooth-Kopfhörer prüfen |

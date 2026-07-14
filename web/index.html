@@ -51,6 +51,9 @@
     <div style="font-size:.8rem;color:var(--mut);margin-top:6px;">
       Alle gängigen Formate: MP4, MOV, MKV, WEBM, MP3, WAV, M4A …
       Bei reinen Audiodateien gibt es Audio (ohne Video) zurück.</div>
+    <div style="margin:10px 0 4px;font-size:.9rem;color:var(--mut);">— oder Text direkt eingeben (auch Sprachmemo-Abschriften, Notizen …):</div>
+    <textarea id="textEingabe" rows="3" placeholder="Text hier einfügen — wird übersetzt und vorgelesen"
+      style="width:100%;padding:10px;border:1px solid var(--line);border-radius:10px;font-size:.95rem;font-family:inherit;resize:vertical;"></textarea>
   </div>
 
   <div class="card">
@@ -150,8 +153,33 @@ const audio = document.getElementById("audio");
 
 document.getElementById("los").onclick = async () => {
   const datei = document.getElementById("video").files[0];
+  const text = document.getElementById("textEingabe").value.trim();
+  if (!datei && text) {
+    // Reiner Text-Auftrag: uebersetzen + vorlesen (neutrale Stimme)
+    document.getElementById("los").disabled = true;
+    document.getElementById("prog").classList.remove("hidden");
+    statusEl.className = "status";
+    statusEl.textContent = "Übersetze Text…";
+    try {
+      const fd2 = new FormData();
+      fd2.append("text", text);
+      fd2.append("zielsprache", sel.value);
+      fd2.append("quellsprache", (navigator.language || "de").split("-")[0]);
+      const res2 = await fetch("/api/text_auftrag", { method: "POST", body: fd2 });
+      const { job_id } = await res2.json();
+      try { localStorage.setItem("letzterJob", job_id); } catch (e) {}
+      await warte(job_id);
+    } catch (e) {
+      statusEl.textContent = "Fehler: " + e.message;
+      statusEl.className = "status fehler";
+    } finally {
+      document.getElementById("los").disabled = false;
+      document.getElementById("prog").classList.add("hidden");
+    }
+    return;
+  }
   if (!datei) {
-    statusEl.textContent = "⚠️ Bitte zuerst oben ein Video auswählen (Schritt 1).";
+    statusEl.textContent = "⚠️ Bitte oben eine Datei wählen ODER Text eingeben (Schritt 1).";
     statusEl.className = "status fehler";
     document.getElementById("video").scrollIntoView({ behavior: "smooth", block: "center" });
     return;

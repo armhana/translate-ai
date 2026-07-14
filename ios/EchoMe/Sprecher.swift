@@ -87,6 +87,19 @@ final class Sprecher: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
         spielt = false
     }
 
+    /// Für den Live-Modus: Satz sofort in die Sprech-Warteschlange legen
+    /// (AVSpeechSynthesizer spielt Utterances automatisch nacheinander ab).
+    func sprichZusatz(text: String, sprache: String, eigeneStimme: Bool) {
+        let satz = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !satz.isEmpty else { return }
+        aktiviereAudio()
+        self.sprache = sprache
+        self.eigeneStimme = eigeneStimme
+        let utterance = AVSpeechUtterance(string: satz)
+        utterance.voice = passendeStimme()
+        synth.speak(utterance)
+    }
+
     /// „⏪ 10 s“: ein Satz zurück (Satzgrenzen als praktikable Näherung)
     func spuleZurueck() { springe(um: -1) }
     /// „10 s ⏩“: ein Satz vor

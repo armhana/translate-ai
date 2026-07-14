@@ -297,10 +297,39 @@ class App(tk.Tk):
     def _run_video(self):
         path = self.video_path.get()
         if not path:
-            messagebox.showwarning(APP_TITLE, "Bitte zuerst eine Videodatei wählen.")
+            # Kein Video? Dann eingetippten/eingefuegten Text uebersetzen
+            # (z.B. Sprachmemo-Abschrift, Notiz) — Vertonung wie gewohnt.
+            text = self.txt_orig.get("1.0", "end").strip()
+            if not text:
+                messagebox.showwarning(APP_TITLE,
+                    "Bitte eine Datei wählen ODER Text in das Feld "
+                    "'Transkript (Original)' einfügen.")
+                return
+            self.btn_video_go.config(state="disabled")
+            threading.Thread(target=self._text_worker, args=(text,), daemon=True).start()
             return
         self.btn_video_go.config(state="disabled")
         threading.Thread(target=self._video_worker, args=(path,), daemon=True).start()
+
+    def _text_worker(self, text):
+        """Nur-Text-Auftrag: uebersetzen; Vertonung danach wie gewohnt
+        (eigene Stimme braucht allerdings eine Videodatei als Stimmprobe)."""
+        try:
+            import locale as _loc
+            src_lang = (_loc.getdefaultlocale()[0] or "de")[:2]
+            tgt = self.video_tgt.get()
+            if src_lang != tgt:
+                self._set_status(f"Übersetze Text {src_lang} → {tgt}…")
+                text_t = self.translator.translate(text, src_lang, tgt)
+            else:
+                text_t = text
+            self._set_text(self.txt_trans, text_t)
+            self._set_status("Text übersetzt — '② Vertonung erzeugen' zum Vorlesen "
+                             "(eigene Stimme braucht eine Videodatei als Stimmprobe).")
+        except Exception as e:
+            self._set_status(f"Fehler: {e}")
+        finally:
+            self.btn_video_go.config(state="normal")
 
     def _video_worker(self, path):
         try:
